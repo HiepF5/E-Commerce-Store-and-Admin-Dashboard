@@ -1,5 +1,9 @@
-import { response } from "express";
 import User from "../models/user.model.js";
+import jwt from "jsonwebtoken";
+import redis from "../config/connectToRedis.js";
+import generateAuthToken from "../utils/generateAuthToken.js";
+import setAuthCookies from "../utils/setAuthCookies.js";
+import storeRefreshToken from "../utils/storeRefreshToken.js";
 const signup = async (req, res) => {
   const { email, password, username } = req.body;
   try {
@@ -12,7 +16,10 @@ const signup = async (req, res) => {
       password,
       username,
     });
-    
+    //authenticate the user
+    const { accessToken, refreshToken } = await generateAuthToken(user._id);
+    await storeRefreshToken(user._id, refreshToken);
+    setAuthCookies(res, accessToken, refreshToken);
     res.status(201).json({
       user,
       message: "User created successfully",
@@ -24,25 +31,43 @@ const signup = async (req, res) => {
 };
 const login = async (req, res) => {
   try {
-    const user = await User.findByCredentials(
-      req.body.email,
-      req.body.password
-    );
-    const token = await user.generateAuthToken();
-    res.send({ user, token });
+    const { email, password } = req.body;
+    const user = await User.findOne({ email });
+    if (user && (await user.comparePassword(password))) {
+      const { accessToken, refreshToken } = await generateAuthToken(user._id);
+      await storeRefreshToken(user._id, refreshToken);
+      setAuthCookies(res, accessToken, refreshToken);
+      res.status(200).json({
+        _id: user._id,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        message: "Login successful",
+      });
+    } else {
+      res.status(401).json({ message: "Invalid email or password" });
+    }
   } catch (error) {
-    res.status(400).send();
+    console.log("Error in login controller: ", error.message);
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 };
 const logout = async (req, res) => {
   try {
-    req.user.tokens = req.user.tokens.filter((token) => {
-      return token.token !== req.token;
-    });
-    await req.user.save();
-    res.send();
+    const refreshToken = req.cookies.refreshToken;
+    if (!refreshToken) {
+      return res.status(401).send({ message: "Unauthorized" });
+    }
+    if (refreshToken) {
+      const decoded = jwt.verify(refreshToken, process.env.REFRESH_JWT_SECRET);
+      await redis.del(`refresh_token:${decoded.userId}`);
+    }
+    res.clearCookie("refreshToken");
+    res.clearCookie("accessToken");
+    res.json({ message: "Logged out successfully" });
   } catch (error) {
-    res.status(500).send();
+    console.log("Error in logout controller: ", error.message);
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 };
 export { signup, login, logout };
