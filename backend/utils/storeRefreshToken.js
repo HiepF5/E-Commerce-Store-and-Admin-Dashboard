@@ -1,4 +1,4 @@
-import redis from '../config/connectToRedis.js'
+import redis from '../config/redis.js'
 const storeRefreshToken = async (userId, refreshToken) => {
   try {
     await redis.set(
